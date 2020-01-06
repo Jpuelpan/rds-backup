@@ -53,19 +53,38 @@ Resources:
         ZipFile: |
           import boto3
           import time
+          import json
           import os
+
+          RDS_ID = os.getenv('RDS_ID')
           client = boto3.client('rds')
 
           def handler(event, context):
-              id = time.strftime("%Y-%m-%d-%H-%M-%S")
-              print('Taking snapshot of ' + os.getenv('RDS_ID'))
-
-              client.create_db_snapshot(
-                  DBInstanceIdentifier=os.getenv('RDS_ID'),
-                  DBSnapshotIdentifier="snapshot-" + id
+              res = client.describe_db_snapshots(
+                  DBInstanceIdentifier=RDS_ID,
               )
 
-              print('Snapshot created')
+              snapshots = res["DBSnapshots"]
+              snapshots = list(filter(lambda x: x["SnapshotType"] == "manual" and x["Status"] is not "deleted" and x["DBSnapshotIdentifier"].startswith("snapshot"), snapshots))
+              snapshots.sort(key=lambda x: x["SnapshotCreateTime"])
+
+              if len(snapshots) > 50:
+                  last_snapshot = snapshots[0]
+                  snapshot_id = last_snapshot["DBSnapshotIdentifier"]
+
+                  client.delete_db_snapshot(
+                      DBSnapshotIdentifier=snapshot_id
+                  )
+
+              new_snapshot_id = "snapshot-" + time.strftime("%Y-%m-%d-%H-%M-%S")
+              print("Taking snapshot of " + RDS_ID)
+
+              client.create_db_snapshot(
+                  DBInstanceIdentifier=RDS_ID,
+                  DBSnapshotIdentifier=new_snapshot_id
+              )
+
+              print("Snapshot created: " + new_snapshot_id)
               return "OK"
 
   EventRule:
@@ -80,7 +99,7 @@ Resources:
 
   TakeSnapshotFunctionPermission:
     Type: AWS::Lambda::Permission
-    Properties: 
+    Properties:
       Action: 'lambda:InvokeFunction'
       FunctionName: !GetAtt TakeSnapshotFunction.Arn
       Principal: 'events.amazonaws.com'
